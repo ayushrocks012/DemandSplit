@@ -3,10 +3,11 @@ Option Explicit
 
 '================================================================================================================
 ' --- DATA ACCESS LAYER CLASS (M_DataAccess) ---
-' V15.1: Converted from Standard Module to Class Module to allow instantiation.
+' V15.3: Addressed Rubberduck code inspection warnings.
+'      - Separated declaration and instantiation of collection objects.
 '
 ' Author:      Ayush Goyal (Refactored by Gemini)
-' Date:        19-Jun-2025
+' Date:        20-Jun-2025
 ' Purpose:     Handles all direct interaction with the source data. Loads sheets into memory,
 '              builds caches, and provides query functions for the rest of the application.
 '              This class isolates the application from the raw data structure.
@@ -44,7 +45,7 @@ Public Function LoadAllData(ByVal wb As Workbook) As Boolean
     CacheDemandDataRows
     
     M_Utilities.WriteToLog "Info", "LoadAllData", "All source data loaded and validated."
-    M_Utilities.LogPerformance tCheckpoint, "Load, Validate & Cache Data"
+    tCheckpoint = M_Utilities.LogPerformance(tCheckpoint, "Load, Validate & Cache Data")
     LoadAllData = True
     Exit Function
 
@@ -128,7 +129,10 @@ End Sub
 '================================================================================================================
 
 Public Function GetUniqueAffiliates() As Collection
-    Dim dict As Object, r As Long, col As New Collection
+    Dim dict As Object, r As Long
+    Dim col As Collection
+    Set col = New Collection
+    
     Set dict = CreateObject("Scripting.Dictionary")
     If IsArray(arrDemandData) Then
         For r = 2 To UBound(arrDemandData, 1)
@@ -268,9 +272,9 @@ Public Function GetCombinedHeaderRow(ByVal lngMonthCount As Long) As Variant
     End If
     
     Dim arrDemandHeaders() As Variant: arrDemandHeaders = Application.WorksheetFunction.Index(arrDemandData, 1, 0)
-    Dim lngDemandLCol As Long: lngDemandLCol = UBound(arrDemandData, 2)
+    Dim lngDemandLCol As Long: lngDemandLcol = UBound(arrDemandData, 2)
     
-    Dim arrCombined() As Variant: ReDim arrCombined(1 To 8 + lngMonthCount + (lngDemandLCol - (COL_DEMAND_START - 1)))
+    Dim arrCombined() As Variant: ReDim arrCombined(1 To 8 + lngMonthCount + (lngDemandLcol - (COL_DEMAND_START - 1)))
     
     arrCombined(1) = "Affiliate": arrCombined(2) = "Forecast Tier": arrCombined(3) = "Forecast Sub-Tier": arrCombined(4) = "Local Item Nbr"
     arrCombined(5) = "Desc": arrCombined(6) = "I-S-D": arrCombined(7) = "Active/Discontinued": arrCombined(8) = "Phase Out Month"
@@ -279,7 +283,7 @@ Public Function GetCombinedHeaderRow(ByVal lngMonthCount As Long) As Variant
         For c = 1 To UBound(arrHistHeaders): arrCombined(c + 8) = arrHistHeaders(c): Next c
     End If
     
-    For c = COL_DEMAND_START To lngDemandLCol
+    For c = COL_DEMAND_START To lngDemandLcol
         Dim varHeaderValue As Variant: varHeaderValue = arrDemandHeaders(c)
         If IsDate(varHeaderValue) Then
             arrCombined(c + 8 + lngMonthCount - (COL_DEMAND_START - 1)) = CDate(varHeaderValue)
