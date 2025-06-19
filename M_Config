@@ -1,0 +1,50 @@
+'@Folder("2. Configuration")
+Option Explicit
+
+'================================================================================================
+'--- CONFIGURATION MODULE (M_Config) ---
+' V15.0: Major Architectural Refactor
+'
+' Author:      Ayush Goyal
+' Date:        19-Jun-2025
+' Purpose:     Centralizes all constants and settings for the forecasting tool.
+'              Modify values here to adjust tool behavior without changing core logic.
+'================================================================================================
+
+'--- DEBUGGING & LOGGING FLAGS ---
+Public Const DEBUG_MODE As Boolean = False 'Set to TRUE to skip file saving and enable more detailed logging.
+
+'--- SHEET NAME CONSTANTS ---
+Public Const SHEET_STATUS As String = "Product Status"
+Public Const SHEET_DEMAND As String = "Demand Forecast"
+Public Const SHEET_HISTORY As String = "Historical Sales"
+Public Const SHEET_LOG As String = "Log"
+Public Const SHEET_SUMMARY_PREFIX As String = "Summary"
+
+'--- PRODUCT STATUS ENUMERATION ---
+' Using an Enum provides type safety and IntelliSense, preventing typos in the code.
+Public Enum ProductStatus
+    psUnknown
+    psActive
+    psPhaseInOut
+    psDiscontinued
+    psNew
+End Enum
+
+'--- COLUMN INDEX CONSTANTS (Based on your Excel files) ---
+
+'-- Universal Columns (Present in multiple sheets) --
+Public Const COL_AFFILIATE As Long = 1       'e.g., "UK", "France"
+Public Const COL_TIER As Long = 2            'e.g., "VITAL 1.5KCAL RTH"
+Public Const COL_SUB_TIER As Long = 3        'e.g., "Sub-Tier A"
+Public Const COL_ISD As Long = 6             'Unique Product ID (I-S-D)
+
+'-- 'Product Status' Sheet Specific Columns --
+Public Const COL_STATUS As Long = 7          'e.g., "Active", "Discontinued"
+Public Const COL_PHASE_OUT_DATE As Long = 8  'Date the phase-out begins
+Public Const COL_PHASE_OUT_PCT As Long = 9   'Percentage of forecast in phase-out month
+Public Const COL_SUPERSEDED_BY As Long = 10  'The I-S-D of the replacement product
+
+'-- 'Demand Forecast' & 'Historical Sales' Sheets --
+Public Const COL_DEMAND_START As Long = 3    'First column containing a forecast month/value
+Public Const COL_HISTORY_START As Long = 7   'First column containing a historical sales month/value
