@@ -3,10 +3,12 @@ Option Explicit
 
 '================================================================================================
 '--- CLASS MODULE: cAffiliate ---
-' V15.0: Major Architectural Refactor
+' V15.3: Addressed Rubberduck code inspection warnings.
+'      - Made dictionary/collection access explicit with .Item().
+'      - Separated declaration and instantiation of collection objects.
 '
 ' Author:      Ayush Goyal (Refactored by Gemini)
-' Date:        19-Jun-2025
+' Date:        20-Jun-2025
 ' Purpose:     Represents a single affiliate. Encapsulates all products and tiers
 '              for that affiliate and orchestrates the calculation process for them.
 '================================================================================================
@@ -39,7 +41,7 @@ Public Sub Initialize(ByVal strAffiliateName As String, ByVal DAL As M_DataAcces
     ' Populate the Tiers and Products dictionaries
     Dim varProductKey As Variant, lngProductRow As Long, arrProductData As Variant, strTierName As String
     For Each varProductKey In dictProductRows.Keys
-        lngProductRow = dictProductRows(varProductKey)
+        lngProductRow = dictProductRows.Item(varProductKey)
         arrProductData = DAL.GetStatusDataRow(lngProductRow)
         
         ' Add product data to our internal dictionary
@@ -50,10 +52,10 @@ Public Sub Initialize(ByVal strAffiliateName As String, ByVal DAL As M_DataAcces
         If Not m_dictTiers.Exists(strTierName) Then
             m_dictTiers.Add strTierName, New Collection
         End If
-        m_dictTiers(strTierName).Add arrProductData(COL_ISD)
+        m_dictTiers.Item(strTierName).Add arrProductData(COL_ISD)
     Next varProductKey
     
-    M_Utilities.LogPerformance tCheckpoint, "Initialize Affiliate Object: " & m_strName
+    tCheckpoint = M_Utilities.LogPerformance(tCheckpoint, "Initialize Affiliate Object: " & m_strName)
 End Sub
 
 '================================================================================================
@@ -62,7 +64,8 @@ End Sub
 
 Public Function ProcessForecast(ByVal DAL As M_DataAccess) As Collection
     Dim tCheckpoint As Double: tCheckpoint = Timer
-    Dim colAllTierOutputs As New Collection
+    Dim colAllTierOutputs As Collection
+    Set colAllTierOutputs = New Collection
     
     Dim lngHistMonthCount As Long: lngHistMonthCount = DAL.GetHistoricalMonthCount()
     
@@ -86,14 +89,14 @@ Public Function ProcessForecast(ByVal DAL As M_DataAccess) As Collection
         End If
     Next varTier
     
-    M_Utilities.LogPerformance tCheckpoint, "Process Forecast for Affiliate: " & m_strName
+    tCheckpoint = M_Utilities.LogPerformance(tCheckpoint, "Process Forecast for Affiliate: " & m_strName)
     Set ProcessForecast = colAllTierOutputs
 End Function
 
 
 Private Function BuildTierOutputArray(ByVal strTier As String, ByVal arrHeader As Variant, ByVal lngMonthCount As Long, ByVal lngOutputCols As Long, ByVal DAL As M_DataAccess, ByVal dictTierSumCache As Object, ByVal dictSubTierSumCache As Object) As Variant
     Dim colProductsInTier As Collection
-    Set colProductsInTier = m_dictTiers(strTier)
+    Set colProductsInTier = m_dictTiers.Item(strTier)
     If colProductsInTier.Count = 0 Then Exit Function
     
     Dim arrOutput() As Variant
@@ -107,7 +110,7 @@ Private Function BuildTierOutputArray(ByVal strTier As String, ByVal arrHeader A
     Dim r As Long: r = 2 ' Start on row 2 of the output array
     Dim varProduct As Variant
     For Each varProduct In colProductsInTier
-        Dim arrProductData As Variant: arrProductData = m_dictProducts(varProduct)
+        Dim arrProductData As Variant: arrProductData = m_dictProducts.Item(varProduct)
         
         ' --- A. Static Data ---
         arrOutput(r, 1) = arrProductData(1): arrOutput(r, 2) = arrProductData(2): arrOutput(r, 3) = arrProductData(3)
