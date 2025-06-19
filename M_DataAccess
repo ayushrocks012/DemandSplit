@@ -1,0 +1,321 @@
+'@Folder("3. Modules")
+Option Explicit
+
+'================================================================================================================
+' --- DATA ACCESS LAYER MODULE (M_DataAccess) ---
+' V15.0: Major Architectural Refactor
+'
+' Author:      Ayush Goyal (Refactored by Gemini)
+' Date:        19-Jun-2025
+' Purpose:     Handles all direct interaction with the source data. Loads sheets into memory,
+'              builds caches, and provides query functions for the rest of the application.
+'              This module isolates the application from the raw data structure.
+'================================================================================================================
+
+'--- PRIVATE MODULE-LEVEL DATA STORE ---
+Private arrStatusData As Variant
+Private arrHistoryData As Variant
+Private arrDemandData As Variant
+Private dictLifecycleMap As Object
+Private dictDemandCache As Object
+
+'================================================================================================================
+' 1. INITIALIZATION & DATA LOADING
+'================================================================================================================
+
+Public Function LoadAllData(ByVal wb As Workbook) As Boolean
+    Dim tCheckpoint As Double: tCheckpoint = Timer
+    On Error GoTo Load_ErrorHandler
+    
+    Application.StatusBar = "Loading and validating source data..."
+    
+    ' Load raw data from sheets into arrays
+    arrStatusData = LoadSheetToArray(wb.Sheets(SHEET_STATUS))
+    arrHistoryData = LoadSheetToArray(wb.Sheets(SHEET_HISTORY))
+    arrDemandData = LoadSheetToArray(wb.Sheets(SHEET_DEMAND))
+    
+    ' Validate that data was loaded successfully
+    If Not IsArray(arrStatusData) Or UBound(arrStatusData, 1) < 2 Then Err.Raise 515, , "Sheet '" & SHEET_STATUS & "' is missing or empty."
+    If Not IsArray(arrHistoryData) Or UBound(arrHistoryData, 1) < 2 Then Err.Raise 516, , "Sheet '" & SHEET_HISTORY & "' is missing or empty."
+    If Not IsArray(arrDemandData) Or UBound(arrDemandData, 1) < 2 Then Err.Raise 517, , "Sheet '" & SHEET_DEMAND & "' is missing or empty."
+
+    ' Build caches for faster lookups
+    BuildLifecycleMap
+    CacheDemandDataRows
+    
+    M_Utilities.WriteToLog "Info", "LoadAllData", "All source data loaded and validated."
+    M_Utilities.LogPerformance tCheckpoint, "Load, Validate & Cache Data"
+    LoadAllData = True
+    Exit Function
+
+Load_ErrorHandler:
+    Dim strErrorMsg As String
+    strErrorMsg = "Failed to load source sheets. " & vbCrLf & vbCrLf & Err.Description
+    M_Utilities.WriteToLog "FATAL", "LoadAllData", strErrorMsg
+    MsgBox strErrorMsg, vbCritical, "Process Halted"
+    LoadAllData = False
+End Function
+
+Private Function LoadSheetToArray(ByVal ws As Worksheet) As Variant
+    If ws Is Nothing Then Exit Function
+    Dim lRow As Long, lCol As Long
+    On Error Resume Next
+    lRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+    lCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
+    On Error GoTo 0
+    If lRow > 1 And lCol > 0 Then LoadSheetToArray = ws.Range(ws.Cells(1, 1), ws.Cells(lRow, lCol)).Value
+End Function
+
+'================================================================================================================
+' 2. CACHE BUILDING
+'================================================================================================================
+
+Private Sub BuildLifecycleMap()
+    Dim r As Long
+    Dim varCompositeKey As Variant, objTempLifecycle As cProductLifecycle
+    Set dictLifecycleMap = CreateObject("Scripting.Dictionary")
+    
+    On Error GoTo BuildMap_ErrorHandler
+    
+    ' First pass: Create all product objects
+    For r = 2 To UBound(arrStatusData, 1)
+        If Len(Trim$(arrStatusData(r, COL_ISD))) > 0 And Len(Trim$(arrStatusData(r, COL_AFFILIATE))) > 0 Then
+            varCompositeKey = Trim$(arrStatusData(r, COL_AFFILIATE)) & "|" & Trim$(arrStatusData(r, COL_ISD))
+            If dictLifecycleMap.Exists(CStr(varCompositeKey)) Then
+                M_Utilities.WriteToLog "Warning", "BuildLifecycleMap", "Duplicate product key found, row " & r & ": '" & varCompositeKey & "'"
+            Else
+                Set objTempLifecycle = New cProductLifecycle
+                objTempLifecycle.Init arrStatusData, r
+                dictLifecycleMap.Add CStr(varCompositeKey), objTempLifecycle
+            End If
+        Else
+            M_Utilities.WriteToLog "Warning", "BuildLifecycleMap", "Missing Affiliate or I-S-D in 'Product Status' row " & r & ". Skipped."
+        End If
+    Next r
+
+    ' Second pass: Link successors now that all objects exist
+    For Each varCompositeKey In dictLifecycleMap.Keys
+        Set objTempLifecycle = dictLifecycleMap.Item(varCompositeKey)
+        objTempLifecycle.LinkSuccessor dictLifecycleMap
+    Next varCompositeKey
+    
+    Exit Sub
+    
+BuildMap_ErrorHandler:
+    M_Utilities.WriteToLog "FATAL", "BuildLifecycleMap", "Error building lifecycle map: " & Err.Description
+End Sub
+
+Private Sub CacheDemandDataRows()
+    On Error Resume Next
+    Set dictDemandCache = CreateObject("Scripting.Dictionary")
+    If Not IsArray(arrDemandData) Then Exit Sub
+    
+    Dim r As Long, strKey As String
+    For r = 2 To UBound(arrDemandData, 1)
+        If UBound(arrDemandData, 2) >= COL_TIER Then
+            strKey = LCase$(Trim$(arrDemandData(r, COL_AFFILIATE))) & "|" & LCase$(Trim$(arrDemandData(r, COL_TIER)))
+            If Not dictDemandCache.Exists(strKey) Then
+                dictDemandCache.Add strKey, r
+            End If
+        End If
+    Next r
+    On Error GoTo 0
+End Sub
+
+
+'================================================================================================================
+' 3. PUBLIC QUERY FUNCTIONS
+'================================================================================================================
+
+Public Function GetUniqueAffiliates() As Collection
+    Dim dict As Object, r As Long, col As New Collection
+    Set dict = CreateObject("Scripting.Dictionary")
+    If IsArray(arrDemandData) Then
+        For r = 2 To UBound(arrDemandData, 1)
+            If Not IsEmpty(arrDemandData(r, COL_AFFILIATE)) Then
+                If Not dict.Exists(arrDemandData(r, COL_AFFILIATE)) Then
+                    dict.Add arrDemandData(r, COL_AFFILIATE), 1
+                    col.Add arrDemandData(r, COL_AFFILIATE)
+                End If
+            End If
+        Next r
+    End If
+    Set GetUniqueAffiliates = col
+End Function
+
+Public Function GetAllProductsForAffiliate(ByVal strAffiliate As String) As Object
+    Dim dict As Object, r As Long, strKey As String
+    Set dict = CreateObject("Scripting.Dictionary")
+    If IsArray(arrStatusData) Then
+        For r = 2 To UBound(arrStatusData, 1)
+            If LCase$(Trim$(arrStatusData(r, COL_AFFILIATE))) = LCase$(strAffiliate) Then
+                strKey = Trim$(arrStatusData(r, COL_ISD))
+                If Not dict.Exists(strKey) Then
+                    dict.Add strKey, r ' Store the row index
+                End If
+            End If
+        Next r
+    End If
+    Set GetAllProductsForAffiliate = dict
+End Function
+
+Public Function GetLifecycleObject(ByVal strCompositeKey As String) As cProductLifecycle
+    If dictLifecycleMap.Exists(strCompositeKey) Then
+        Set GetLifecycleObject = dictLifecycleMap.Item(strCompositeKey)
+    Else
+        ' Return a new, empty lifecycle object to prevent errors
+        Set GetLifecycleObject = New cProductLifecycle
+    End If
+End Function
+
+Public Function GetHistoricalDataRow(ByVal strAffiliate As String, ByVal strProduct As String, ByVal lngHistColCount As Long) As Variant
+    Dim r As Long, c As Long, arrResult() As Variant
+    ReDim arrResult(1 To lngHistColCount - 6) ' Default empty array
+    
+    ' This linear scan is slow. A pre-built cache could optimize this.
+    For r = 2 To UBound(arrHistoryData, 1)
+        If Trim$(arrHistoryData(r, COL_AFFILIATE)) = strAffiliate And Trim$(arrHistoryData(r, COL_ISD)) = strProduct Then
+            For c = COL_HISTORY_START To lngHistColCount
+                 arrResult(c - (COL_HISTORY_START - 1)) = arrHistoryData(r, c)
+            Next c
+            GetHistoricalDataRow = arrResult
+            Exit Function
+        End If
+    Next r
+    GetHistoricalDataRow = arrResult ' Return empty array if not found
+End Function
+
+Public Function GetHistoricalTierSum(ByVal strAffiliate As String, ByVal strTier As String, ByVal lngHistLCol As Long) As Double
+    Dim dblTotalSum As Double, r As Long, c As Long, strHSProduct As String, strCompositeKey As String, varValue As Variant
+    
+    For r = 2 To UBound(arrHistoryData, 1)
+        If LCase$(Trim$(arrHistoryData(r, COL_AFFILIATE))) = LCase$(strAffiliate) And LCase$(Trim$(arrHistoryData(r, COL_TIER))) = LCase$(strTier) Then
+            strHSProduct = Trim$(arrHistoryData(r, COL_ISD))
+            strCompositeKey = Trim$(arrHistoryData(r, COL_AFFILIATE)) & "|" & strHSProduct
+            
+            Dim objLifecycle As cProductLifecycle
+            Set objLifecycle = GetLifecycleObject(strCompositeKey) ' Use the public getter
+
+            If objLifecycle.Status <> psDiscontinued Then
+                For c = COL_HISTORY_START To lngHistLCol
+                    varValue = arrHistoryData(r, c)
+                    If IsNumeric(varValue) Then dblTotalSum = dblTotalSum + CDbl(varValue)
+                Next c
+            Else
+                For c = COL_HISTORY_START To lngHistLCol
+                    varValue = arrHistoryData(r, c)
+                    If objLifecycle.PhaseOutDate > 0 And IsDate(arrHistoryData(1, c)) Then
+                        If CDate(arrHistoryData(1, c)) < objLifecycle.PhaseOutDate Then
+                            If IsNumeric(varValue) Then dblTotalSum = dblTotalSum + CDbl(varValue)
+                        End If
+                    End If
+                Next c
+            End If
+        End If
+    Next r
+    GetHistoricalTierSum = dblTotalSum
+End Function
+
+Public Function GetHistoricalSubTierSum(ByVal strAffiliate As String, ByVal strTier As String, ByVal strSubTier As String, ByVal lngHistLCol As Long) As Double
+    Dim dblTotalSum As Double, r As Long, c As Long, varValue As Variant
+    ' This linear scan is slow. A pre-built cache could optimize this.
+    For r = 2 To UBound(arrHistoryData, 1)
+        If LCase$(Trim$(arrHistoryData(r, COL_AFFILIATE))) = LCase$(strAffiliate) And LCase$(Trim$(arrHistoryData(r, COL_TIER))) = LCase$(strTier) And LCase$(Trim$(arrHistoryData(r, COL_SUB_TIER))) = LCase$(strSubTier) Then
+            For c = COL_HISTORY_START To lngHistLCol
+                varValue = arrHistoryData(r, c)
+                If IsNumeric(varValue) Then dblTotalSum = dblTotalSum + CDbl(varValue)
+            Next c
+        End If
+    Next r
+    GetHistoricalSubTierSum = dblTotalSum
+End Function
+
+Public Function GetDemandDataRow(ByVal strAffiliate As String, ByVal strTier As String) As Long
+    Dim strKey As String: strKey = LCase$(strAffiliate) & "|" & LCase$(strTier)
+    If dictDemandCache.Exists(strKey) Then GetDemandDataRow = dictDemandCache.Item(strKey) Else GetDemandDataRow = 0
+End Function
+
+Public Function GetHistoricalMonthCount() As Long
+    Dim lngHistLCol As Long, lngCurrCol As Long, lngCount As Long, dteStartDate As Date
+    lngHistLCol = UBound(arrHistoryData, 2)
+    
+    If UBound(arrDemandData, 2) < COL_DEMAND_START Or Not IsDate(arrDemandData(1, COL_DEMAND_START)) Then
+        M_Utilities.WriteToLog "Warning", "GetHistoricalMonthCount", "Demand forecast start date is missing or invalid. Count set to 0."
+        GetHistoricalMonthCount = 0
+        Exit Function
+    End If
+    
+    dteStartDate = CDate(arrDemandData(1, COL_DEMAND_START))
+
+    For lngCurrCol = COL_HISTORY_START To lngHistLCol
+        If IsDate(arrHistoryData(1, lngCurrCol)) Then
+            If CDate(arrHistoryData(1, lngCurrCol)) < dteStartDate Then
+                lngCount = lngCount + 1
+            Else
+                Exit For
+            End If
+        End If
+    Next lngCurrCol
+    GetHistoricalMonthCount = lngCount
+End Function
+
+Public Function GetCombinedHeaderRow(ByVal lngMonthCount As Long) As Variant
+    Dim arrHistHeaders() As Variant, c As Long
+    
+    If lngMonthCount > 0 Then
+        ReDim arrHistHeaders(1 To lngMonthCount)
+        For c = 1 To lngMonthCount: arrHistHeaders(c) = arrHistoryData(1, c + (COL_HISTORY_START - 1)): Next c
+    End If
+    
+    Dim arrDemandHeaders() As Variant: arrDemandHeaders = Application.WorksheetFunction.Index(arrDemandData, 1, 0)
+    Dim lngDemandLCol As Long: lngDemandLCol = UBound(arrDemandData, 2)
+    
+    Dim arrCombined() As Variant: ReDim arrCombined(1 To 8 + lngMonthCount + (lngDemandLCol - (COL_DEMAND_START - 1)))
+    
+    arrCombined(1) = "Affiliate": arrCombined(2) = "Forecast Tier": arrCombined(3) = "Forecast Sub-Tier": arrCombined(4) = "Local Item Nbr"
+    arrCombined(5) = "Desc": arrCombined(6) = "I-S-D": arrCombined(7) = "Active/Discontinued": arrCombined(8) = "Phase Out Month"
+    
+    If lngMonthCount > 0 Then
+        For c = 1 To UBound(arrHistHeaders): arrCombined(c + 8) = arrHistHeaders(c): Next c
+    End If
+    
+    For c = COL_DEMAND_START To lngDemandLCol
+        Dim varHeaderValue As Variant: varHeaderValue = arrDemandHeaders(c)
+        If IsDate(varHeaderValue) Then
+            arrCombined(c + 8 + lngMonthCount - (COL_DEMAND_START - 1)) = CDate(varHeaderValue)
+        Else
+            arrCombined(c + 8 + lngMonthCount - (COL_DEMAND_START - 1)) = varHeaderValue
+        End If
+    Next c
+    
+    GetCombinedHeaderRow = arrCombined
+End Function
+
+Public Function GetDemandDataForTier(ByVal lngDemandRow As Long) As Variant
+    If lngDemandRow <= 0 Then Exit Function
+    If Not IsArray(arrDemandData) Then Exit Function
+    
+    Dim c As Long, i As Long
+    Dim result() As Variant
+    ReDim result(1 To UBound(arrDemandData, 2) - (COL_DEMAND_START - 1))
+    
+    i = 1
+    For c = COL_DEMAND_START To UBound(arrDemandData, 2)
+        result(i) = arrDemandData(lngDemandRow, c)
+        i = i + 1
+    Next c
+    
+    GetDemandDataForTier = result
+End Function
+
+Public Function GetStatusDataRow(ByVal lngRow As Long) As Variant
+    ' Returns a single row of the status data array for initializing products
+    If lngRow <= 0 Or Not IsArray(arrStatusData) Then Exit Function
+    Dim c As Long
+    Dim result() As Variant
+    ReDim result(1 To UBound(arrStatusData, 2))
+    For c = 1 To UBound(arrStatusData, 2)
+        result(c) = arrStatusData(lngRow, c)
+    Next c
+    GetStatusDataRow = result
+End Function
