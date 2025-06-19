@@ -3,7 +3,9 @@ Option Explicit
 
 '================================================================================================================
 ' --- REPORT GENERATOR CLASS (M_ReportGenerator) ---
-' V15.2: Fixed "Variable not defined" error by declaring wbReport.
+' V15.3: Addressed Rubberduck code inspection warnings.
+'      - Removed unused DAL parameter from GenerateFinalReport.
+'      - Separated declaration and instantiation of collection objects.
 '
 ' Author:      Ayush Goyal (Refactored by Gemini)
 ' Date:        19-Jun-2025
@@ -11,7 +13,7 @@ Option Explicit
 '              report workbook. This class contains no business or calculation logic.
 '================================================================================================================
 
-Public Sub GenerateFinalReport(ByVal wbHost As Workbook, ByVal strAffiliate As String, ByVal colTierOutputData As Collection, ByVal DAL As M_DataAccess)
+Public Sub GenerateFinalReport(ByVal wbHost As Workbook, ByVal strAffiliate As String, ByVal colTierOutputData As Collection)
     On Error GoTo Report_ErrorHandler
     
     If colTierOutputData Is Nothing Or colTierOutputData.Count = 0 Then
@@ -47,7 +49,7 @@ Public Sub GenerateFinalReport(ByVal wbHost As Workbook, ByVal strAffiliate As S
     Exit Sub
     
 Report_ErrorHandler:
-    M_Utilities.lngWarningCount = M_Utilities.lngWarningCount + 1
+    M_Utilities.IncrementWarningCount
     M_Utilities.WriteToLog "Error", "GenerateFinalReport", "Could not generate or save report for '" & strAffiliate & "'. Error: " & Err.Description
 End Sub
 
@@ -108,9 +110,9 @@ Public Sub CleanupTemporarySheets(ByVal wbHost As Workbook, ByVal strAffiliate A
 End Sub
 
 Private Function CreateOutputWorkbook(ByVal wbHost As Workbook, ByVal strAffiliate As String, ByVal wsSummary As Worksheet) As Workbook
-    ' *** FIX: Declare the wbReport variable ***
     Dim wbReport As Workbook
-    Dim colSheetsToCopy As Collection: Set colSheetsToCopy = GetAffiliateTierSheets(wbHost, strAffiliate)
+    Dim colSheetsToCopy As Collection
+    Set colSheetsToCopy = GetAffiliateTierSheets(wbHost, strAffiliate)
     
     ' Add summary sheet to the beginning of the collection
     colSheetsToCopy.Add wsSummary, Before:=1
@@ -126,7 +128,7 @@ Private Function CreateOutputWorkbook(ByVal wbHost As Workbook, ByVal strAffilia
     ReDim arrSheetNames(1 To colSheetsToCopy.Count)
     Dim i As Long
     For i = 1 To colSheetsToCopy.Count
-        arrSheetNames(i) = colSheetsToCopy(i).Name
+        arrSheetNames(i) = colSheetsToCopy.Item(i).Name
     Next i
     
     ' Copy sheets to a new workbook
@@ -268,7 +270,9 @@ End Sub
 '================================================================================================================
 
 Private Function GetAffiliateTierSheets(ByVal wbHost As Workbook, ByVal strAffiliate As String) As Collection
-    Dim colSheets As New Collection
+    Dim colSheets As Collection
+    Set colSheets = New Collection
+    
     Dim ws As Worksheet
     Dim strPattern As String: strPattern = M_Utilities.SanitizeSheetName(strAffiliate & " - ")
     
