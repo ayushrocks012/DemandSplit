@@ -3,31 +3,49 @@ Option Explicit
 
 '================================================================================================================
 ' --- UTILITIES MODULE (M_Utilities) ---
-' V15.0: Major Architectural Refactor
+' V15.3: Addressed Rubberduck code inspection warnings.
+'      - Encapsulated public fields into private fields with public properties/methods.
+'      - Converted LogPerformance to a function.
 '
 ' Author:      Ayush Goyal (Refactored by Gemini)
-' Date:        19-Jun-2025
+' Date:        20-Jun-2025
 ' Purpose:     Provides shared, stateless helper functions and manages application-wide
 '              resources like the log sheet and warning counter.
 '================================================================================================================
 
-'--- PUBLIC SHARED VARIABLES ---
-Public wsLog As Worksheet
-Public lngWarningCount As Long
+'--- PRIVATE MODULE-LEVEL VARIABLES ---
+Private p_wsLog As Worksheet
+Private p_lngWarningCount As Long
 
 '================================================================================================================
-' 1. LOGGING & PERFORMANCE
+' 1. ENCAPSULATED PROPERTIES & METHODS
+'================================================================================================================
+
+Public Property Get GetLogSheet() As Worksheet
+    Set GetLogSheet = p_wsLog
+End Property
+
+Public Property Get GetWarningCount() As Long
+    GetWarningCount = p_lngWarningCount
+End Property
+
+Public Sub IncrementWarningCount()
+    p_lngWarningCount = p_lngWarningCount + 1
+End Sub
+
+'================================================================================================================
+' 2. LOGGING & PERFORMANCE
 '================================================================================================================
 
 Public Sub InitializeLogSheet(ByVal wb As Workbook)
-    lngWarningCount = 0
+    p_lngWarningCount = 0
     On Error Resume Next
     wb.Sheets(SHEET_LOG).Delete
     On Error GoTo 0
     
-    Set wsLog = wb.Sheets.Add(After:=wb.Sheets(wb.Sheets.Count))
+    Set p_wsLog = wb.Sheets.Add(After:=wb.Sheets(wb.Sheets.Count))
     
-    With wsLog
+    With p_wsLog
         .Name = SHEET_LOG
         With .Range("A1:E1")
             .Value = Array("Timestamp", "Type", "Procedure", "Message", "Duration (s)")
@@ -38,11 +56,11 @@ Public Sub InitializeLogSheet(ByVal wb As Workbook)
 End Sub
 
 Public Sub WriteToLog(ByVal strType As String, ByVal strProcedure As String, ByVal strMessage As String, Optional dblDuration As Double = -1)
-    If wsLog Is Nothing Then Exit Sub
+    If p_wsLog Is Nothing Then Exit Sub
     Dim lNextRow As Long
     
     On Error Resume Next ' Avoid errors in logging from halting the main process
-    With wsLog
+    With p_wsLog
         lNextRow = .Cells(.Rows.Count, "A").End(xlUp).Row + 1
         .Cells(lNextRow, "A").Value = Now
         .Cells(lNextRow, "B").Value = strType
@@ -57,15 +75,15 @@ Public Sub WriteToLog(ByVal strType As String, ByVal strProcedure As String, ByV
     On Error GoTo 0
 End Sub
 
-Public Sub LogPerformance(ByRef tCheckpoint As Double, ByVal strStageName As String)
+Public Function LogPerformance(ByVal tCheckpoint As Double, ByVal strStageName As String) As Double
     Dim dblElapsed As Double
     dblElapsed = Timer - tCheckpoint
     WriteToLog "Profile", strStageName, "Stage completed.", dblElapsed
-    tCheckpoint = Timer
-End Sub
+    LogPerformance = Timer
+End Function
 
 '================================================================================================================
-' 2. GENERAL HELPERS
+' 3. GENERAL HELPERS
 '================================================================================================================
 
 Public Function SanitizeSheetName(ByVal strName As String) As String
