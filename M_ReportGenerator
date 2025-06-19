@@ -3,7 +3,7 @@ Option Explicit
 
 '================================================================================================================
 ' --- REPORT GENERATOR CLASS (M_ReportGenerator) ---
-' V15.1: Converted from Standard Module to Class Module to allow instantiation.
+' V15.2: Fixed "Variable not defined" error by declaring wbReport.
 '
 ' Author:      Ayush Goyal (Refactored by Gemini)
 ' Date:        19-Jun-2025
@@ -108,6 +108,8 @@ Public Sub CleanupTemporarySheets(ByVal wbHost As Workbook, ByVal strAffiliate A
 End Sub
 
 Private Function CreateOutputWorkbook(ByVal wbHost As Workbook, ByVal strAffiliate As String, ByVal wsSummary As Worksheet) As Workbook
+    ' *** FIX: Declare the wbReport variable ***
+    Dim wbReport As Workbook
     Dim colSheetsToCopy As Collection: Set colSheetsToCopy = GetAffiliateTierSheets(wbHost, strAffiliate)
     
     ' Add summary sheet to the beginning of the collection
