@@ -1,18 +1,18 @@
-'@Folder("3. Modules")
+'@Folder("4. Classes")
 Option Explicit
 
 '================================================================================================================
-' --- DATA ACCESS LAYER MODULE (M_DataAccess) ---
-' V15.0: Major Architectural Refactor
+' --- DATA ACCESS LAYER CLASS (M_DataAccess) ---
+' V15.1: Converted from Standard Module to Class Module to allow instantiation.
 '
 ' Author:      Ayush Goyal (Refactored by Gemini)
 ' Date:        19-Jun-2025
 ' Purpose:     Handles all direct interaction with the source data. Loads sheets into memory,
 '              builds caches, and provides query functions for the rest of the application.
-'              This module isolates the application from the raw data structure.
+'              This class isolates the application from the raw data structure.
 '================================================================================================================
 
-'--- PRIVATE MODULE-LEVEL DATA STORE ---
+'--- PRIVATE MEMBER VARIABLES ---
 Private arrStatusData As Variant
 Private arrHistoryData As Variant
 Private arrDemandData As Variant
@@ -124,7 +124,7 @@ End Sub
 
 
 '================================================================================================================
-' 3. PUBLIC QUERY FUNCTIONS
+' 3. PUBLIC QUERY FUNCTIONS (CLASS METHODS)
 '================================================================================================================
 
 Public Function GetUniqueAffiliates() As Collection
