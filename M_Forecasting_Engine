@@ -3,7 +3,10 @@ Option Explicit
 
 '================================================================================================================
 ' --- FORECASTING ENGINE MODULE (M_Forecasting_Engine) ---
-' V15.0: Major Architectural Refactor
+' V15.3: Addressed Rubberduck code inspection warnings.
+'      - Separated declaration and instantiation of objects.
+'      - Replaced unsafe IIf with a standard If block.
+'      - Cleaned up error handling and unused parameters.
 '
 ' Author:      Ayush Goyal (Refactored by Gemini)
 ' Date:        19-Jun-2025
@@ -12,22 +15,24 @@ Option Explicit
 '              specific logic (data access, calculations, report building) to other modules/classes.
 '================================================================================================================
 
+'@Ignore UnusedMember
 Public Sub RunForecast()
     Dim tStart As Double: tStart = Timer
     Dim wbHost As Workbook: Set wbHost = ThisWorkbook
+    Dim colAffiliateNames As Collection
     
     ' --- 1. INITIALIZATION ---
     If Not InitializeEnvironment(wbHost) Then GoTo Main_Exit
     
     ' --- 2. DATA LOADING ---
-    Dim DAL As New M_DataAccess
+    Dim DAL As M_DataAccess
+    Set DAL = New M_DataAccess
     If Not DAL.LoadAllData(wbHost) Then
         M_Utilities.WriteToLog "FATAL", "RunForecast", "Aborting due to data load failure."
         GoTo Main_Exit
     End If
     
     ' --- 3. PROCESSING ---
-    Dim colAffiliateNames As Collection
     Set colAffiliateNames = DAL.GetUniqueAffiliates
     
     If colAffiliateNames.Count = 0 Then
@@ -44,7 +49,8 @@ Public Sub RunForecast()
         On Error GoTo Affiliate_ErrorHandler
         
         ' A) Create and initialize the affiliate object
-        Dim oAffiliate As New cAffiliate
+        Dim oAffiliate As cAffiliate
+        Set oAffiliate = New cAffiliate
         oAffiliate.Initialize strAffiliateName, DAL
         
         ' B) Perform all calculations
@@ -52,15 +58,16 @@ Public Sub RunForecast()
         Set colTierOutputData = oAffiliate.ProcessForecast(DAL)
         
         ' C) Generate the report file
-        Dim ReportGen As New M_ReportGenerator
-        ReportGen.GenerateFinalReport wbHost, strAffiliateName, colTierOutputData, DAL
+        Dim ReportGen As M_ReportGenerator
+        Set ReportGen = New M_ReportGenerator
+        ReportGen.GenerateFinalReport wbHost, strAffiliateName, colTierOutputData
         
         ' D) Clean up temporary sheets for this affiliate
         ReportGen.CleanupTemporarySheets wbHost, strAffiliateName
         
         GoTo Next_Affiliate
 Affiliate_ErrorHandler:
-        M_Utilities.lngWarningCount = M_Utilities.lngWarningCount + 1
+        M_Utilities.IncrementWarningCount
         M_Utilities.WriteToLog "Error", "RunForecast", "A critical error occurred while processing affiliate '" & strAffiliateName & "'. Error: " & Err.Description
 Next_Affiliate:
         Set oAffiliate = Nothing
@@ -69,7 +76,13 @@ Next_Affiliate:
 
 Main_Exit:
     ' --- 4. FINALIZATION ---
-    FinalizeRun wbHost, tStart, IIf(colAffiliateNames Is Nothing, 0, colAffiliateNames.Count)
+    Dim lngAffiliateCount As Long
+    If Not colAffiliateNames Is Nothing Then
+        lngAffiliateCount = colAffiliateNames.Count
+    Else
+        lngAffiliateCount = 0
+    End If
+    FinalizeRun tStart, lngAffiliateCount
 End Sub
 
 '================================================================================================================
@@ -95,7 +108,7 @@ Private Function InitializeEnvironment(ByVal wb As Workbook) As Boolean
     
     M_Utilities.InitializeLogSheet wb
     
-    M_Utilities.LogPerformance tCheckpoint, "Initialize Environment"
+    tCheckpoint = M_Utilities.LogPerformance(tCheckpoint, "Initialize Environment")
     InitializeEnvironment = True
     Exit Function
 
@@ -104,7 +117,7 @@ Init_ErrorHandler:
     InitializeEnvironment = False
 End Function
 
-Private Sub FinalizeRun(ByVal wb As Workbook, ByVal tStart As Double, ByVal lngAffiliateCount As Long)
+Private Sub FinalizeRun(ByVal tStart As Double, ByVal lngAffiliateCount As Long)
     ' This sub runs regardless of success or failure to clean up the environment.
     On Error Resume Next ' Ensure cleanup completes
     
@@ -118,7 +131,16 @@ Private Sub FinalizeRun(ByVal wb As Workbook, ByVal tStart As Double, ByVal lngA
     Dim strMessage As String
     strMessage = "Forecast process completed in " & Format$(Timer - tStart, "#,##0.00") & " seconds." & vbCrLf & vbCrLf
     strMessage = strMessage & "Affiliates Processed: " & lngAffiliateCount & vbCrLf
-    strMessage = strMessage & "Warnings: " & M_Utilities.lngWarningCount & " (see Log sheet for details)"
+    strMessage = strMessage & "Warnings: " & M_Utilities.GetWarningCount & " (see Log sheet for details)"
     
-    MsgBox strMessage, IIf(M_Utilities.lngWarningCount > 0, vbExclamation, vbInformation), "Forecast Update Complete"
+    Dim msgIcon As VbMsgBoxStyle
+    If M_Utilities.GetWarningCount > 0 Then
+        msgIcon = vbExclamation
+    Else
+        msgIcon = vbInformation
+    End If
+    
+    MsgBox strMessage, msgIcon, "Forecast Update Complete"
+    
+    On Error GoTo 0 ' Restore normal error handling
 End Sub
