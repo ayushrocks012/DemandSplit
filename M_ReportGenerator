@@ -1,0 +1,304 @@
+'@Folder("3. Modules")
+Option Explicit
+
+'================================================================================================================
+' --- REPORT GENERATOR MODULE (M_ReportGenerator) ---
+' V15.0: Major Architectural Refactor
+'
+' Author:      Ayush Goyal (Refactored by Gemini)
+' Date:        19-Jun-2025
+' Purpose:     Handles all Excel UI interaction. Creates, formats, and saves the final output
+'              report workbook. This module contains no business or calculation logic.
+'================================================================================================================
+
+Public Sub GenerateFinalReport(ByVal wbHost As Workbook, ByVal strAffiliate As String, ByVal colTierOutputData As Collection, ByVal DAL As M_DataAccess)
+    On Error GoTo Report_ErrorHandler
+    
+    If colTierOutputData Is Nothing Or colTierOutputData.Count = 0 Then
+        M_Utilities.WriteToLog "Info", "GenerateFinalReport", "No data was calculated for '" & strAffiliate & "'. Report not generated."
+        Exit Sub
+    End If
+    
+    ' Create a temporary summary sheet and all tier sheets
+    Dim wsSummary As Worksheet
+    Set wsSummary = CreateTemporarySheets(wbHost, strAffiliate, colTierOutputData)
+    
+    ' Consolidate data into summary sheet
+    AppendAllTiersToSummary wsSummary, wbHost, strAffiliate
+    
+    ' Create the final workbook from the temp sheets
+    Dim wbReport As Workbook
+    Set wbReport = CreateOutputWorkbook(wbHost, strAffiliate, wsSummary)
+    
+    ' Save or display the final workbook
+    If Not wbReport Is Nothing Then
+        If Not DEBUG_MODE Then
+            Dim strFilePath As String
+            strFilePath = GetOutputFilePath(wbHost.Path, strAffiliate)
+            Application.StatusBar = "Saving final report for " & strAffiliate & "..."
+            wbReport.SaveAs strFilePath
+            wbReport.Close SaveChanges:=False
+            M_Utilities.WriteToLog "Info", "GenerateFinalReport", "Report saved for " & strAffiliate & " to " & strFilePath
+        Else
+            M_Utilities.WriteToLog "Debug", "GenerateFinalReport", "DEBUG MODE: Report for " & strAffiliate & " created but not saved/closed."
+        End If
+    End If
+    
+    Exit Sub
+    
+Report_ErrorHandler:
+    M_Utilities.lngWarningCount = M_Utilities.lngWarningCount + 1
+    M_Utilities.WriteToLog "Error", "GenerateFinalReport", "Could not generate or save report for '" & strAffiliate & "'. Error: " & Err.Description
+End Sub
+
+Private Function CreateTemporarySheets(ByVal wbHost As Workbook, ByVal strAffiliate As String, ByVal colTierData As Collection) As Worksheet
+    ' Create the main summary sheet
+    Dim wsSummary As Worksheet
+    Set wsSummary = wbHost.Sheets.Add(After:=wbHost.Sheets(wbHost.Sheets.Count))
+    wsSummary.Name = "TempSummary"
+    SetupOutputSheetHeaders wsSummary
+    
+    Dim arrTierData As Variant
+    For Each arrTierData In colTierData
+        Dim strTierName As String: strTierName = arrTierData(2, 2) ' Get tier name from first data row
+        Dim strSheetName As String: strSheetName = M_Utilities.SanitizeSheetName(strAffiliate & " - " & strTierName)
+        
+        Dim wsTier As Worksheet
+        Set wsTier = wbHost.Sheets.Add(After:=wbHost.Sheets(wbHost.Sheets.Count))
+        wsTier.Name = strSheetName
+        
+        ' Write the data array to the new sheet
+        wsTier.Range("A1").Resize(UBound(arrTierData, 1), UBound(arrTierData, 2)).Value = arrTierData
+        
+        If Not DEBUG_MODE Then
+            FormatEnhancedSheet wsTier
+        End If
+    Next arrTierData
+    
+    Set CreateTemporarySheets = wsSummary
+End Function
+
+Private Sub AppendAllTiersToSummary(ByVal wsSummary As Worksheet, ByVal wbHost As Workbook, ByVal strAffiliate As String)
+    Dim colSheets As Collection
+    Set colSheets = GetAffiliateTierSheets(wbHost, strAffiliate)
+    
+    Dim ws As Worksheet
+    For Each ws In colSheets
+        AppendToSummarySheet ws, wsSummary
+    Next ws
+    
+    If Not DEBUG_MODE Then
+        FormatEnhancedSheet wsSummary
+    End If
+End Sub
+
+Public Sub CleanupTemporarySheets(ByVal wbHost As Workbook, ByVal strAffiliate As String)
+    On Error Resume Next
+    Application.DisplayAlerts = False
+    Dim ws As Worksheet
+    For Each ws In wbHost.Worksheets
+        If ws.Name = "TempSummary" Or InStr(1, ws.Name, M_Utilities.SanitizeSheetName(strAffiliate & " - ")) > 0 Then
+            ws.Delete
+        End If
+    Next ws
+    Application.DisplayAlerts = True
+    On Error GoTo 0
+End Sub
+
+Private Function CreateOutputWorkbook(ByVal wbHost As Workbook, ByVal strAffiliate As String, ByVal wsSummary As Worksheet) As Workbook
+    Dim colSheetsToCopy As Collection: Set colSheetsToCopy = GetAffiliateTierSheets(wbHost, strAffiliate)
+    
+    ' Add summary sheet to the beginning of the collection
+    colSheetsToCopy.Add wsSummary, Before:=1
+    
+    ' Check if there is any data to actually copy
+    If colSheetsToCopy.Count < 2 And wsSummary.Cells(wsSummary.Rows.Count, "A").End(xlUp).Row < 2 Then
+        Set CreateOutputWorkbook = Nothing
+        Exit Function
+    End If
+    
+    ' Create an array of sheet names to copy
+    Dim arrSheetNames() As String
+    ReDim arrSheetNames(1 To colSheetsToCopy.Count)
+    Dim i As Long
+    For i = 1 To colSheetsToCopy.Count
+        arrSheetNames(i) = colSheetsToCopy(i).Name
+    Next i
+    
+    ' Copy sheets to a new workbook
+    wbHost.Sheets(arrSheetNames).Copy
+    Set wbReport = ActiveWorkbook
+    
+    ' Rename the summary sheet in the new workbook
+    On Error Resume Next
+    wbReport.Sheets("TempSummary").Name = SHEET_SUMMARY_PREFIX
+    On Error GoTo 0
+    
+    ' Paste values to break formulas and links
+    Dim ws As Worksheet
+    For Each ws In wbReport.Worksheets
+        ws.UsedRange.Value = ws.UsedRange.Value
+    Next ws
+    
+    Application.CutCopyMode = False
+    
+    ' Final formatting
+    wbReport.Sheets(SHEET_SUMMARY_PREFIX).Activate
+    ActiveWindow.FreezePanes = False
+    wbReport.Sheets(SHEET_SUMMARY_PREFIX).Range("A2").Select
+    ActiveWindow.FreezePanes = True
+    
+    Set CreateOutputWorkbook = wbReport
+End Function
+
+Private Sub AppendToSummarySheet(ByVal wsTier As Worksheet, ByVal wsSummary As Worksheet)
+    Dim lngTierLRow As Long, lngTierLCol As Long, lngSummaryLRow As Long
+    
+    lngTierLRow = wsTier.Cells(wsTier.Rows.Count, "A").End(xlUp).Row
+    ' Exclude total row if it exists
+    If LCase$(Trim$(wsTier.Cells(lngTierLRow, "A").Value)) = "total" Then lngTierLRow = lngTierLRow - 1
+    If lngTierLRow < 2 Then Exit Sub
+    
+    lngTierLCol = wsTier.Cells(1, wsTier.Columns.Count).End(xlToLeft).Column
+    lngSummaryLRow = wsSummary.Cells(wsSummary.Rows.Count, "A").End(xlUp).Row
+    
+    ' Copy headers if summary sheet is empty
+    If IsEmpty(wsSummary.Range("I1").Value) Then
+        wsTier.Range("I1", wsTier.Cells(1, lngTierLCol)).Copy wsSummary.Range("I1")
+    End If
+    
+    ' Copy data
+    Dim rngData As Range
+    Set rngData = wsTier.Range("A2", wsTier.Cells(lngTierLRow, lngTierLCol))
+    wsSummary.Range("A" & lngSummaryLRow + 1).Resize(rngData.Rows.Count, rngData.Columns.Count).Value = rngData.Value
+End Sub
+
+'================================================================================================================
+' 2. FORMATTING SUB-PROCEDURES
+'================================================================================================================
+
+Private Sub FormatEnhancedSheet(ByVal ws As Worksheet)
+    If ws.Cells(1, 1).Value = "" Then Exit Sub
+    
+    Dim lngLastRow As Long, lngLastCol As Long, lngTotalRow As Long
+    
+    With ws
+        lngLastRow = .Cells(.Rows.Count, "A").End(xlUp).Row
+        lngLastCol = .Cells(1, .Columns.Count).End(xlToLeft).Column
+    End With
+    
+    If lngLastRow < 2 Then Exit Sub
+    
+    lngTotalRow = ApplyTotalRow(ws, lngLastRow, lngLastCol)
+    ApplyTableStyles ws, lngTotalRow, lngLastCol
+    ApplyNumberFormats ws, lngTotalRow, lngLastCol
+    
+    ws.Cells.EntireColumn.AutoFit
+    
+    If ws.Name = SHEET_SUMMARY_PREFIX Then
+        ws.Range("A1", ws.Cells(lngTotalRow, lngLastCol)).Sort Key1:=ws.Range("F2"), Order1:=xlAscending, Header:=xlYes
+    End If
+End Sub
+
+Private Function ApplyTotalRow(ByVal ws As Worksheet, ByVal lngLastRow As Long, ByVal lngLastCol As Long) As Long
+    Dim lngTotalRow As Long: lngTotalRow = lngLastRow
+    If LCase$(ws.Cells(lngLastRow, "A").Value) <> "total" Then lngTotalRow = lngLastRow + 1
+    
+    ws.Cells(lngTotalRow, "A").Value = "TOTAL"
+    Dim i As Long
+    For i = 9 To lngLastCol
+        On Error Resume Next
+        ws.Cells(lngTotalRow, i).Value = Application.WorksheetFunction.Sum(ws.Range(ws.Cells(2, i), ws.Cells(lngLastRow, i)))
+        On Error GoTo 0
+    Next i
+    ApplyTotalRow = lngTotalRow
+End Function
+
+Private Sub ApplyTableStyles(ByVal ws As Worksheet, ByVal lngTotalRow As Long, ByVal lngLastCol As Long)
+    Dim rngHeader As Range, rngTotal As Range, rngFull As Range
+    Dim r As Long, lngHistLCol As Long
+    
+    With ws
+        Set rngHeader = .Range(.Cells(1, 1), .Cells(1, lngLastCol))
+        Set rngTotal = .Range(.Cells(lngTotalRow, 1), .Cells(lngTotalRow, lngLastCol))
+        Set rngFull = .Range(.Cells(1, 1), .Cells(lngTotalRow, lngLastCol))
+    End With
+    
+    rngFull.Interior.ColorIndex = xlNone
+    rngFull.Borders.LineStyle = xlNone
+    rngFull.Font.Bold = False
+    
+    With rngHeader
+        .Font.Bold = True: .Font.Color = vbWhite: .Interior.Color = RGB(47, 85, 151)
+    End With
+    With rngTotal
+        .Font.Bold = True: .Interior.Color = RGB(221, 235, 247)
+    End With
+    
+    For r = 2 To lngTotalRow - 1
+        If r Mod 2 = 0 Then ws.Range(ws.Cells(r, 1), ws.Cells(r, lngLastCol)).Interior.Color = RGB(242, 242, 242)
+    Next r
+    
+    lngHistLCol = GetLastHistoricalColumn(ws)
+    If lngHistLCol > 8 Then
+        ws.Range(ws.Cells(2, 9), ws.Cells(lngTotalRow - 1, lngHistLCol)).Interior.Color = RGB(220, 220, 220)
+        With ws.Range(ws.Cells(1, lngHistLCol), ws.Cells(lngTotalRow, lngHistLCol)).Borders(xlEdgeRight)
+            .LineStyle = xlContinuous: .Weight = xlMedium
+        End With
+    End If
+    
+    rngFull.Borders.LineStyle = xlContinuous
+    rngFull.Borders.Weight = xlThin
+End Sub
+
+Private Sub ApplyNumberFormats(ByVal ws As Worksheet, ByVal lngTotalRow As Long, ByVal lngLastCol As Long)
+    With ws
+        .Range(.Cells(2, 9), .Cells(lngTotalRow, lngLastCol)).NumberFormat = "_(* #,##0_);_(* (#,##0);_(* ""-""??_);_(@_)"
+        .Range(.Cells(1, 9), .Cells(1, lngLastCol)).NumberFormat = "mmm-yy"
+    End With
+End Sub
+
+
+'================================================================================================================
+' 3. HELPER FUNCTIONS
+'================================================================================================================
+
+Private Function GetAffiliateTierSheets(ByVal wbHost As Workbook, ByVal strAffiliate As String) As Collection
+    Dim colSheets As New Collection
+    Dim ws As Worksheet
+    Dim strPattern As String: strPattern = M_Utilities.SanitizeSheetName(strAffiliate & " - ")
+    
+    For Each ws In wbHost.Worksheets
+        If ws.Name <> "TempSummary" And InStr(1, ws.Name, strPattern) = 0 Then ' Note: InStr should be > 0
+            colSheets.Add ws
+        End If
+    Next ws
+    
+    Set GetAffiliateTierSheets = colSheets
+End Function
+
+Private Function GetOutputFilePath(ByVal strBasePath As String, ByVal strAffiliate As String) As String
+    GetOutputFilePath = strBasePath & "\Demand ForeCast - " & strAffiliate & " - " & Format$(Now, "DDMMYYYY_HHMMSS") & ".xlsx"
+End Function
+
+Private Sub SetupOutputSheetHeaders(ByVal ws As Worksheet)
+    ws.Range("A1:H1").Value = Array("Affiliate", "Forecast Tier", "Forecast Sub-Tier", "Local Item Nbr", "Desc", "I-S-D", "Active/Discontinued", "Phase Out Month")
+End Sub
+
+Private Function GetLastHistoricalColumn(ByVal ws As Worksheet) As Long
+    Dim lngLastCol As Long, i As Long, dteStartDate As Date
+    On Error Resume Next
+    ' This is a dependency smell. The report generator shouldn't know about the demand sheet.
+    ' This could be improved by passing the date as a parameter.
+    dteStartDate = CDate(ThisWorkbook.Sheets(SHEET_DEMAND).Cells(1, COL_DEMAND_START).Value)
+    On Error GoTo 0
+    If dteStartDate = 0 Then GetLastHistoricalColumn = 8: Exit Function
+    
+    lngLastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
+    GetLastHistoricalColumn = 8
+    For i = 9 To lngLastCol
+        If IsDate(ws.Cells(1, i).Value) Then
+            If CDate(ws.Cells(1, i).Value) < dteStartDate Then GetLastHistoricalColumn = i Else Exit For
+        End If
+    Next i
+End Function
