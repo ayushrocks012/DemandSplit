@@ -1,14 +1,14 @@
-'@Folder("3. Modules")
+'@Folder("4. Classes")
 Option Explicit
 
 '================================================================================================================
-' --- REPORT GENERATOR MODULE (M_ReportGenerator) ---
-' V15.0: Major Architectural Refactor
+' --- REPORT GENERATOR CLASS (M_ReportGenerator) ---
+' V15.1: Converted from Standard Module to Class Module to allow instantiation.
 '
 ' Author:      Ayush Goyal (Refactored by Gemini)
 ' Date:        19-Jun-2025
 ' Purpose:     Handles all Excel UI interaction. Creates, formats, and saves the final output
-'              report workbook. This module contains no business or calculation logic.
+'              report workbook. This class contains no business or calculation logic.
 '================================================================================================================
 
 Public Sub GenerateFinalReport(ByVal wbHost As Workbook, ByVal strAffiliate As String, ByVal colTierOutputData As Collection, ByVal DAL As M_DataAccess)
@@ -60,18 +60,20 @@ Private Function CreateTemporarySheets(ByVal wbHost As Workbook, ByVal strAffili
     
     Dim arrTierData As Variant
     For Each arrTierData In colTierData
-        Dim strTierName As String: strTierName = arrTierData(2, 2) ' Get tier name from first data row
-        Dim strSheetName As String: strSheetName = M_Utilities.SanitizeSheetName(strAffiliate & " - " & strTierName)
-        
-        Dim wsTier As Worksheet
-        Set wsTier = wbHost.Sheets.Add(After:=wbHost.Sheets(wbHost.Sheets.Count))
-        wsTier.Name = strSheetName
-        
-        ' Write the data array to the new sheet
-        wsTier.Range("A1").Resize(UBound(arrTierData, 1), UBound(arrTierData, 2)).Value = arrTierData
-        
-        If Not DEBUG_MODE Then
-            FormatEnhancedSheet wsTier
+        If UBound(arrTierData, 1) > 1 Then ' Ensure there is data beyond the header
+            Dim strTierName As String: strTierName = arrTierData(2, 2) ' Get tier name from first data row
+            Dim strSheetName As String: strSheetName = M_Utilities.SanitizeSheetName(strAffiliate & " - " & strTierName)
+            
+            Dim wsTier As Worksheet
+            Set wsTier = wbHost.Sheets.Add(After:=wbHost.Sheets(wbHost.Sheets.Count))
+            wsTier.Name = strSheetName
+            
+            ' Write the data array to the new sheet
+            wsTier.Range("A1").Resize(UBound(arrTierData, 1), UBound(arrTierData, 2)).Value = arrTierData
+            
+            If Not DEBUG_MODE Then
+                FormatEnhancedSheet wsTier
+            End If
         End If
     Next arrTierData
     
@@ -269,7 +271,7 @@ Private Function GetAffiliateTierSheets(ByVal wbHost As Workbook, ByVal strAffil
     Dim strPattern As String: strPattern = M_Utilities.SanitizeSheetName(strAffiliate & " - ")
     
     For Each ws In wbHost.Worksheets
-        If ws.Name <> "TempSummary" And InStr(1, ws.Name, strPattern) = 0 Then ' Note: InStr should be > 0
+        If ws.Name <> "TempSummary" And InStr(1, ws.Name, strPattern) > 0 Then
             colSheets.Add ws
         End If
     Next ws
