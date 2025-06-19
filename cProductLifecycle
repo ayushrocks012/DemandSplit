@@ -1,0 +1,108 @@
+'@Folder("4. Classes")
+Option Explicit
+
+'================================================================================================
+'--- CLASS MODULE: cProductLifecycle ---
+' V15.0: Major Architectural Refactor
+'
+' Author:      Ayush Goyal (Refactored by Gemini)
+' Date:        19-Jun-2025
+' Purpose:     Encapsulates all data and logic related to a single product's lifecycle,
+'              including its status, phase-in/out dates, and forecast multipliers.
+'================================================================================================
+
+'--- Private Backing Fields ---
+Private m_strAffiliate As String
+Private m_strProductID As String
+Private m_enmStatus As ProductStatus
+Private m_blnIsPhasingOut As Boolean
+Private m_dtePhaseOutDate As Date
+Private m_dblPhaseOutPercent As Double
+Private m_strSupersededByProductID As String
+Private m_blnIsPhasingIn As Boolean
+Private m_dtePhaseInDate As Date
+Private m_dblPhaseInPercent As Double
+
+'--- Public Properties ---
+Public Property Get Affiliate() As String: Affiliate = m_strAffiliate: End Property
+Public Property Get ProductID() As String: ProductID = m_strProductID: End Property
+Public Property Get Status() As ProductStatus: Status = m_enmStatus: End Property
+Public Property Get PhaseOutDate() As Date: PhaseOutDate = m_dtePhaseOutDate: End Property
+Public Property Get SupersededByProductID() As String: SupersededByProductID = m_strSupersededByProductID: End Property
+
+' Properties used by LinkSuccessor
+Public Property Get IsPhasingOut() As Boolean: IsPhasingOut = m_blnIsPhasingOut: End Property
+Public Property Get PhaseOutPercent() As Double: PhaseOutPercent = m_dblPhaseOutPercent: End Property
+Public Property Let IsPhasingIn(ByVal Value As Boolean): m_blnIsPhasingIn = Value: End Property
+Public Property Let PhaseInDate(ByVal Value As Date): m_dtePhaseInDate = Value: End Property
+Public Property Let PhaseInPercent(ByVal Value As Double): m_dblPhaseInPercent = Value: End Property
+
+
+'================================================================================================
+'--- PUBLIC METHODS ---
+'================================================================================================
+
+Public Sub Init(ByVal arrDataSource As Variant, ByVal lngRow As Long)
+    On Error Resume Next
+    m_strAffiliate = Trim$(arrDataSource(lngRow, COL_AFFILIATE))
+    m_strProductID = Trim$(arrDataSource(lngRow, COL_ISD))
+    m_enmStatus = M_Utilities.GetStatusEnum(Trim$(arrDataSource(lngRow, COL_STATUS)))
+    m_strSupersededByProductID = Trim$(arrDataSource(lngRow, COL_SUPERSEDED_BY))
+    
+    Dim varPhaseOutPct As Variant: varPhaseOutPct = arrDataSource(lngRow, COL_PHASE_OUT_PCT)
+    If IsNumeric(varPhaseOutPct) Then
+        If varPhaseOutPct >= 0 And varPhaseOutPct <= 1 Then
+            m_dblPhaseOutPercent = CDbl(varPhaseOutPct)
+        End If
+    End If
+
+    If m_enmStatus = psPhaseInOut Or m_enmStatus = psDiscontinued Then
+        m_blnIsPhasingOut = True
+        If IsDate(arrDataSource(lngRow, COL_PHASE_OUT_DATE)) Then
+            m_dtePhaseOutDate = CDate(arrDataSource(lngRow, COL_PHASE_OUT_DATE))
+        End If
+    End If
+    On Error GoTo 0
+End Sub
+
+Public Function GetForecastMultiplier(ByVal dteForecastDate As Date) As Double
+    GetForecastMultiplier = 1 ' Default to 100%
+
+    If m_blnIsPhasingIn Then
+        If dteForecastDate < m_dtePhaseInDate Then
+            GetForecastMultiplier = 0 ' Not yet started
+            Exit Function
+        ElseIf Month(dteForecastDate) = Month(m_dtePhaseInDate) And Year(dteForecastDate) = Year(m_dtePhaseInDate) Then
+            GetForecastMultiplier = m_dblPhaseInPercent ' Apply phase-in percentage
+            Exit Function
+        End If
+    End If
+
+    If m_blnIsPhasingOut And m_dtePhaseOutDate > 0 And dteForecastDate >= m_dtePhaseOutDate Then
+        If Month(dteForecastDate) = Month(m_dtePhaseOutDate) And Year(dteForecastDate) = Year(m_dtePhaseOutDate) Then
+            GetForecastMultiplier = m_dblPhaseOutPercent ' Apply phase-out percentage
+        Else
+            GetForecastMultiplier = 0 ' Phased out completely
+        End If
+    End If
+End Function
+
+Public Sub LinkSuccessor(ByVal dictMap As Object)
+    ' This method encapsulates the logic for linking this product to its successor.
+    If Not Me.IsPhasingOut Or Len(Me.SupersededByProductID) = 0 Then Exit Sub
+    
+    Dim strSuccessorKey As String
+    strSuccessorKey = Me.Affiliate & "|" & Me.SupersededByProductID
+    
+    If dictMap.Exists(strSuccessorKey) Then
+        Dim objSuccessor As cProductLifecycle
+        Set objSuccessor = dictMap.Item(strSuccessorKey)
+        
+        ' Update the successor product's properties based on this product's phase-out details.
+        objSuccessor.IsPhasingIn = True
+        objSuccessor.PhaseInDate = Me.PhaseOutDate
+        objSuccessor.PhaseInPercent = 1 - Me.PhaseOutPercent
+    Else
+        M_Utilities.WriteToLog "Warning", "LinkSuccessor", "Product '" & Me.ProductID & "' lists successor '" & Me.SupersededByProductID & "' which was not found in the Product Status sheet."
+    End If
+End Sub
