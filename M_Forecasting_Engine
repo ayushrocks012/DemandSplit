@@ -9,7 +9,7 @@ Option Explicit
 '      - Cleaned up error handling and unused parameters.
 '
 ' Author:      Ayush Goyal (Refactored by Gemini)
-' Date:        19-Jun-2025
+' Date:        20-Jun-2025
 ' Purpose:     Main orchestrator for the forecasting process. Initializes the environment,
 '              manages the high-level workflow, and finalizes the run. Delegates all
 '              specific logic (data access, calculations, report building) to other modules/classes.
@@ -69,6 +69,8 @@ Public Sub RunForecast()
 Affiliate_ErrorHandler:
         M_Utilities.IncrementWarningCount
         M_Utilities.WriteToLog "Error", "RunForecast", "A critical error occurred while processing affiliate '" & strAffiliateName & "'. Error: " & Err.Description
+        ' Resume execution with the next affiliate
+        Resume Next_Affiliate
 Next_Affiliate:
         Set oAffiliate = Nothing
         On Error GoTo 0
@@ -92,7 +94,7 @@ End Sub
 Private Function InitializeEnvironment(ByVal wb As Workbook) As Boolean
     Dim tCheckpoint As Double: tCheckpoint = Timer
     
-    Application.EnableCancelKey = xlErrorHandler
+    ' Use 'On Error GoTo' for specific error handling sections.
     On Error GoTo Init_ErrorHandler
     
     If wb.ReadOnly Then
