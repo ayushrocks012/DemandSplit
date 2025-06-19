@@ -1,0 +1,107 @@
+'@Folder("3. Modules")
+Option Explicit
+
+'================================================================================================================
+' --- UTILITIES MODULE (M_Utilities) ---
+' V15.0: Major Architectural Refactor
+'
+' Author:      Ayush Goyal (Refactored by Gemini)
+' Date:        19-Jun-2025
+' Purpose:     Provides shared, stateless helper functions and manages application-wide
+'              resources like the log sheet and warning counter.
+'================================================================================================================
+
+'--- PUBLIC SHARED VARIABLES ---
+Public wsLog As Worksheet
+Public lngWarningCount As Long
+
+'================================================================================================================
+' 1. LOGGING & PERFORMANCE
+'================================================================================================================
+
+Public Sub InitializeLogSheet(ByVal wb As Workbook)
+    lngWarningCount = 0
+    On Error Resume Next
+    wb.Sheets(SHEET_LOG).Delete
+    On Error GoTo 0
+    
+    Set wsLog = wb.Sheets.Add(After:=wb.Sheets(wb.Sheets.Count))
+    
+    With wsLog
+        .Name = SHEET_LOG
+        With .Range("A1:E1")
+            .Value = Array("Timestamp", "Type", "Procedure", "Message", "Duration (s)")
+            .Font.Bold = True
+        End With
+        .Columns("A:E").AutoFit
+    End With
+End Sub
+
+Public Sub WriteToLog(ByVal strType As String, ByVal strProcedure As String, ByVal strMessage As String, Optional dblDuration As Double = -1)
+    If wsLog Is Nothing Then Exit Sub
+    Dim lNextRow As Long
+    
+    On Error Resume Next ' Avoid errors in logging from halting the main process
+    With wsLog
+        lNextRow = .Cells(.Rows.Count, "A").End(xlUp).Row + 1
+        .Cells(lNextRow, "A").Value = Now
+        .Cells(lNextRow, "B").Value = strType
+        .Cells(lNextRow, "C").Value = strProcedure
+        .Cells(lNextRow, "D").Value = strMessage
+        .Cells(lNextRow, "D").WrapText = False
+        If dblDuration >= 0 Then
+            .Cells(lNextRow, "E").Value = dblDuration
+        End If
+        .Columns("A:E").AutoFit
+    End With
+    On Error GoTo 0
+End Sub
+
+Public Sub LogPerformance(ByRef tCheckpoint As Double, ByVal strStageName As String)
+    Dim dblElapsed As Double
+    dblElapsed = Timer - tCheckpoint
+    WriteToLog "Profile", strStageName, "Stage completed.", dblElapsed
+    tCheckpoint = Timer
+End Sub
+
+'================================================================================================================
+' 2. GENERAL HELPERS
+'================================================================================================================
+
+Public Function SanitizeSheetName(ByVal strName As String) As String
+    Dim strSanitized As String
+    strSanitized = strName
+    strSanitized = Replace(strSanitized, ":", "-")
+    strSanitized = Replace(strSanitized, "\", "-")
+    strSanitized = Replace(strSanitized, "/", "-")
+    strSanitized = Replace(strSanitized, "?", "")
+    strSanitized = Replace(strSanitized, "*", "")
+    strSanitized = Replace(strSanitized, "[", "(")
+    strSanitized = Replace(strSanitized, "]", ")")
+    
+    If Len(strSanitized) > 31 Then
+        strSanitized = Left$(strSanitized, 31)
+    End If
+    
+    SanitizeSheetName = strSanitized
+End Function
+
+Public Function GetStatusEnum(ByVal strStatus As String) As ProductStatus
+    Select Case UCase$(Trim$(strStatus))
+        Case "ACTIVE": GetStatusEnum = psActive
+        Case "PHASEIN-PHASEOUT": GetStatusEnum = psPhaseInOut
+        Case "DISCONTINUED": GetStatusEnum = psDiscontinued
+        Case "NEW": GetStatusEnum = psNew
+        Case Else: GetStatusEnum = psUnknown
+    End Select
+End Function
+
+Public Function GetStatusString(ByVal enmStatus As ProductStatus) As String
+    Select Case enmStatus
+        Case psActive: GetStatusString = "Active"
+        Case psPhaseInOut: GetStatusString = "PhaseIn-PhaseOut"
+        Case psDiscontinued: GetStatusString = "Discontinued"
+        Case psNew: GetStatusString = "New"
+        Case Else: GetStatusString = "Unknown"
+    End Select
+End Function
