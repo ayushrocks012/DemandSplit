@@ -1,0 +1,124 @@
+'@Folder("1. Engine")
+Option Explicit
+
+'================================================================================================================
+' --- FORECASTING ENGINE MODULE (M_Forecasting_Engine) ---
+' V15.0: Major Architectural Refactor
+'
+' Author:      Ayush Goyal (Refactored by Gemini)
+' Date:        19-Jun-2025
+' Purpose:     Main orchestrator for the forecasting process. Initializes the environment,
+'              manages the high-level workflow, and finalizes the run. Delegates all
+'              specific logic (data access, calculations, report building) to other modules/classes.
+'================================================================================================================
+
+Public Sub RunForecast()
+    Dim tStart As Double: tStart = Timer
+    Dim wbHost As Workbook: Set wbHost = ThisWorkbook
+    
+    ' --- 1. INITIALIZATION ---
+    If Not InitializeEnvironment(wbHost) Then GoTo Main_Exit
+    
+    ' --- 2. DATA LOADING ---
+    Dim DAL As New M_DataAccess
+    If Not DAL.LoadAllData(wbHost) Then
+        M_Utilities.WriteToLog "FATAL", "RunForecast", "Aborting due to data load failure."
+        GoTo Main_Exit
+    End If
+    
+    ' --- 3. PROCESSING ---
+    Dim colAffiliateNames As Collection
+    Set colAffiliateNames = DAL.GetUniqueAffiliates
+    
+    If colAffiliateNames.Count = 0 Then
+        M_Utilities.WriteToLog "Warning", "RunForecast", "No affiliates found in source data. Nothing to process."
+        GoTo Main_Exit
+    End If
+    
+    Dim varAffiliateName As Variant
+    For Each varAffiliateName In colAffiliateNames
+        Dim strAffiliateName As String: strAffiliateName = CStr(varAffiliateName)
+        Application.StatusBar = "Processing Affiliate: " & strAffiliateName & "..."
+        M_Utilities.WriteToLog "Info", "RunForecast", "Starting processing for affiliate: " & strAffiliateName
+        
+        On Error GoTo Affiliate_ErrorHandler
+        
+        ' A) Create and initialize the affiliate object
+        Dim oAffiliate As New cAffiliate
+        oAffiliate.Initialize strAffiliateName, DAL
+        
+        ' B) Perform all calculations
+        Dim colTierOutputData As Collection
+        Set colTierOutputData = oAffiliate.ProcessForecast(DAL)
+        
+        ' C) Generate the report file
+        Dim ReportGen As New M_ReportGenerator
+        ReportGen.GenerateFinalReport wbHost, strAffiliateName, colTierOutputData, DAL
+        
+        ' D) Clean up temporary sheets for this affiliate
+        ReportGen.CleanupTemporarySheets wbHost, strAffiliateName
+        
+        GoTo Next_Affiliate
+Affiliate_ErrorHandler:
+        M_Utilities.lngWarningCount = M_Utilities.lngWarningCount + 1
+        M_Utilities.WriteToLog "Error", "RunForecast", "A critical error occurred while processing affiliate '" & strAffiliateName & "'. Error: " & Err.Description
+Next_Affiliate:
+        Set oAffiliate = Nothing
+        On Error GoTo 0
+    Next varAffiliateName
+
+Main_Exit:
+    ' --- 4. FINALIZATION ---
+    FinalizeRun wbHost, tStart, IIf(colAffiliateNames Is Nothing, 0, colAffiliateNames.Count)
+End Sub
+
+'================================================================================================================
+' PRIVATE WORKFLOW STAGES
+'================================================================================================================
+
+Private Function InitializeEnvironment(ByVal wb As Workbook) As Boolean
+    Dim tCheckpoint As Double: tCheckpoint = Timer
+    
+    Application.EnableCancelKey = xlErrorHandler
+    On Error GoTo Init_ErrorHandler
+    
+    If wb.ReadOnly Then
+        MsgBox "This workbook is in Read-Only mode. Please save a copy or enable editing to run the forecast.", vbCritical, "Process Halted"
+        Exit Function
+    End If
+    
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    Application.Calculation = xlCalculationManual
+    Application.EnableEvents = False
+    Application.StatusBar = "Initializing environment..."
+    
+    M_Utilities.InitializeLogSheet wb
+    
+    M_Utilities.LogPerformance tCheckpoint, "Initialize Environment"
+    InitializeEnvironment = True
+    Exit Function
+
+Init_ErrorHandler:
+    MsgBox "A critical error occurred during initialization: " & Err.Description, vbCritical, "Initialization Failed"
+    InitializeEnvironment = False
+End Function
+
+Private Sub FinalizeRun(ByVal wb As Workbook, ByVal tStart As Double, ByVal lngAffiliateCount As Long)
+    ' This sub runs regardless of success or failure to clean up the environment.
+    On Error Resume Next ' Ensure cleanup completes
+    
+    Application.StatusBar = False
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    Application.EnableEvents = True
+    Application.EnableCancelKey = xlInterrupt
+    
+    Dim strMessage As String
+    strMessage = "Forecast process completed in " & Format$(Timer - tStart, "#,##0.00") & " seconds." & vbCrLf & vbCrLf
+    strMessage = strMessage & "Affiliates Processed: " & lngAffiliateCount & vbCrLf
+    strMessage = strMessage & "Warnings: " & M_Utilities.lngWarningCount & " (see Log sheet for details)"
+    
+    MsgBox strMessage, IIf(M_Utilities.lngWarningCount > 0, vbExclamation, vbInformation), "Forecast Update Complete"
+End Sub
