@@ -1,0 +1,184 @@
+'@Folder("4. Classes")
+Option Explicit
+
+'================================================================================================
+'--- CLASS MODULE: cAffiliate ---
+' V15.0: Major Architectural Refactor
+'
+' Author:      Ayush Goyal (Refactored by Gemini)
+' Date:        19-Jun-2025
+' Purpose:     Represents a single affiliate. Encapsulates all products and tiers
+'              for that affiliate and orchestrates the calculation process for them.
+'================================================================================================
+
+'--- PRIVATE CLASS-LEVEL VARIABLES ---
+Private m_strName As String
+Private m_dictProducts As Object  ' Key: Product I-S-D, Item: Full data row from Status sheet
+Private m_dictTiers As Object     ' Key: Tier Name, Item: Collection of Product I-S-Ds in that tier
+
+'================================================================================================
+' 1. INITIALIZATION
+'================================================================================================
+
+Public Sub Initialize(ByVal strAffiliateName As String, ByVal DAL As M_DataAccess)
+    Dim tCheckpoint As Double: tCheckpoint = Timer
+    
+    m_strName = strAffiliateName
+    Set m_dictProducts = CreateObject("Scripting.Dictionary")
+    Set m_dictTiers = CreateObject("Scripting.Dictionary")
+    
+    ' Get all product data for this affiliate from the Data Access Layer
+    Dim dictProductRows As Object ' Key: ProductID, Item: Row index from arrStatusData
+    Set dictProductRows = DAL.GetAllProductsForAffiliate(m_strName)
+    
+    If dictProductRows.Count = 0 Then
+        M_Utilities.WriteToLog "Warning", "cAffiliate.Initialize", "No products found in Status sheet for affiliate: " & m_strName
+        Exit Sub
+    End If
+    
+    ' Populate the Tiers and Products dictionaries
+    Dim varProductKey As Variant, lngProductRow As Long, arrProductData As Variant, strTierName As String
+    For Each varProductKey In dictProductRows.Keys
+        lngProductRow = dictProductRows(varProductKey)
+        arrProductData = DAL.GetStatusDataRow(lngProductRow)
+        
+        ' Add product data to our internal dictionary
+        m_dictProducts.Add arrProductData(COL_ISD), arrProductData
+        
+        ' Organize products by tier
+        strTierName = Trim$(arrProductData(COL_TIER))
+        If Not m_dictTiers.Exists(strTierName) Then
+            m_dictTiers.Add strTierName, New Collection
+        End If
+        m_dictTiers(strTierName).Add arrProductData(COL_ISD)
+    Next varProductKey
+    
+    M_Utilities.LogPerformance tCheckpoint, "Initialize Affiliate Object: " & m_strName
+End Sub
+
+'================================================================================================
+' 2. CORE PROCESSING
+'================================================================================================
+
+Public Function ProcessForecast(ByVal DAL As M_DataAccess) As Collection
+    Dim tCheckpoint As Double: tCheckpoint = Timer
+    Dim colAllTierOutputs As New Collection
+    
+    Dim lngHistMonthCount As Long: lngHistMonthCount = DAL.GetHistoricalMonthCount()
+    
+    ' Create the full header row that will be used for all tier outputs
+    Dim arrHeaderRow As Variant: arrHeaderRow = DAL.GetCombinedHeaderRow(lngHistMonthCount)
+    Dim lngOutputCols As Long: lngOutputCols = UBound(arrHeaderRow)
+    
+    ' Caches for this affiliate's run to avoid repeated calculations
+    Dim dictTierSumCache As Object: Set dictTierSumCache = CreateObject("Scripting.Dictionary")
+    Dim dictSubTierSumCache As Object: Set dictSubTierSumCache = CreateObject("Scripting.Dictionary")
+    
+    Dim varTier As Variant
+    For Each varTier In m_dictTiers.Keys
+        ' Process each tier and get the calculated data array
+        Dim arrTierOutput As Variant
+        arrTierOutput = BuildTierOutputArray(CStr(varTier), arrHeaderRow, lngHistMonthCount, lngOutputCols, DAL, dictTierSumCache, dictSubTierSumCache)
+        
+        ' Add the completed array to our collection
+        If IsArray(arrTierOutput) Then
+            colAllTierOutputs.Add arrTierOutput
+        End If
+    Next varTier
+    
+    M_Utilities.LogPerformance tCheckpoint, "Process Forecast for Affiliate: " & m_strName
+    Set ProcessForecast = colAllTierOutputs
+End Function
+
+
+Private Function BuildTierOutputArray(ByVal strTier As String, ByVal arrHeader As Variant, ByVal lngMonthCount As Long, ByVal lngOutputCols As Long, ByVal DAL As M_DataAccess, ByVal dictTierSumCache As Object, ByVal dictSubTierSumCache As Object) As Variant
+    Dim colProductsInTier As Collection
+    Set colProductsInTier = m_dictTiers(strTier)
+    If colProductsInTier.Count = 0 Then Exit Function
+    
+    Dim arrOutput() As Variant
+    ReDim arrOutput(1 To colProductsInTier.Count + 1, 1 To lngOutputCols)
+    
+    ' Populate Header
+    Dim c As Long
+    For c = 1 To lngOutputCols: arrOutput(1, c) = arrHeader(c): Next c
+
+    ' Populate Data Rows
+    Dim r As Long: r = 2 ' Start on row 2 of the output array
+    Dim varProduct As Variant
+    For Each varProduct In colProductsInTier
+        Dim arrProductData As Variant: arrProductData = m_dictProducts(varProduct)
+        
+        ' --- A. Static Data ---
+        arrOutput(r, 1) = arrProductData(1): arrOutput(r, 2) = arrProductData(2): arrOutput(r, 3) = arrProductData(3)
+        arrOutput(r, 4) = arrProductData(4): arrOutput(r, 5) = arrProductData(5): arrOutput(r, 6) = arrProductData(6)
+        
+        ' --- B. Lifecycle Data ---
+        Dim strCompositeKey As String: strCompositeKey = m_strName & "|" & arrProductData(COL_ISD)
+        Dim objLifecycle As cProductLifecycle: Set objLifecycle = DAL.GetLifecycleObject(strCompositeKey)
+        
+        arrOutput(r, 7) = M_Utilities.GetStatusString(objLifecycle.Status)
+        If objLifecycle.PhaseOutDate > 0 Then arrOutput(r, 8) = objLifecycle.PhaseOutDate
+        
+        ' --- C. Historical Data ---
+        Dim arrHistoricSales As Variant
+        arrHistoricSales = DAL.GetHistoricalDataRow(m_strName, arrProductData(COL_ISD), lngMonthCount + 6)
+        For c = 1 To UBound(arrHistoricSales): arrOutput(r, c + 8) = arrHistoricSales(c): Next c
+        
+        ' --- D. Forecast Calculation ---
+        PopulateForecastValues arrOutput, r, objLifecycle, strTier, arrProductData, lngMonthCount, DAL, dictTierSumCache, dictSubTierSumCache
+        
+        r = r + 1
+    Next varProduct
+    
+    BuildTierOutputArray = arrOutput
+End Function
+
+
+Private Sub PopulateForecastValues(ByRef arrOutput As Variant, ByVal lngRow As Long, ByVal objLifecycle As cProductLifecycle, ByVal strTier As String, ByVal arrProductData As Variant, ByVal lngMonthCount As Long, ByVal DAL As M_DataAccess, ByVal dictTierSumCache As Object, ByVal dictSubTierSumCache As Object)
+    Dim dblSubTierSum As Double, dblTierSum As Double
+    Dim strSubTierKey As String, strTierKey As String, c As Long
+    
+    ' Get historical sums (from cache or calculate and add to cache)
+    strSubTierKey = m_strName & "|" & strTier & "|" & arrProductData(COL_SUB_TIER)
+    If dictSubTierSumCache.Exists(strSubTierKey) Then
+        dblSubTierSum = dictSubTierSumCache.Item(strSubTierKey)
+    Else
+        dblSubTierSum = DAL.GetHistoricalSubTierSum(m_strName, strTier, arrProductData(COL_SUB_TIER), lngMonthCount + 6)
+        dictSubTierSumCache.Add strSubTierKey, dblSubTierSum
+    End If
+    
+    strTierKey = m_strName & "|" & strTier
+    If dictTierSumCache.Exists(strTierKey) Then
+        dblTierSum = dictTierSumCache.Item(strTierKey)
+    Else
+        dblTierSum = DAL.GetHistoricalTierSum(m_strName, strTier, lngMonthCount + 6)
+        dictTierSumCache.Add strTierKey, dblTierSum
+    End If
+    
+    ' Get the demand forecast data for the entire tier
+    Dim lngDemandRow As Long: lngDemandRow = DAL.GetDemandDataRow(m_strName, strTier)
+    If lngDemandRow > 0 Then
+        Dim arrDemandValues As Variant: arrDemandValues = DAL.GetDemandDataForTier(lngDemandRow)
+        Dim lngForecastStartCol As Long: lngForecastStartCol = 8 + lngMonthCount + 1
+        
+        For c = 1 To UBound(arrDemandValues)
+            Dim lngOutputCol As Long: lngOutputCol = lngForecastStartCol + c - 1
+            If lngOutputCol <= UBound(arrOutput, 2) Then
+                arrOutput(lngRow, lngOutputCol) = CalculateForecastValue(objLifecycle, arrOutput(1, lngOutputCol), dblSubTierSum, dblTierSum, arrDemandValues(c))
+            End If
+        Next c
+    End If
+End Sub
+
+Private Function CalculateForecastValue(ByVal objLifecycle As cProductLifecycle, ByVal dteForecastDate As Date, ByVal dblSubTierSum As Double, ByVal dblTierSum As Double, ByVal dblTierDemand As Double) As Double
+    Dim dblBaseForecast As Double
+    If dblTierSum > 0 Then
+        If IsNumeric(dblTierDemand) Then
+            dblBaseForecast = (dblSubTierSum * CDbl(dblTierDemand)) / dblTierSum
+        End If
+    End If
+    
+    ' Apply lifecycle multiplier
+    CalculateForecastValue = dblBaseForecast * objLifecycle.GetForecastMultiplier(dteForecastDate)
+End Function
